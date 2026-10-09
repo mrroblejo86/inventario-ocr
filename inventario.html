@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inventario OCR</title>
+
+https://unpkg.com/tesseract.js@5/dist/tesseract.min.jsscript>
+
+<style>
+body{
+    font-family:Arial,sans-serif;
+    max-width:900px;
+    margin:auto;
+    padding:20px;
+    background:#f4f4f4;
+}
+
+h1{
+    text-align:center;
+}
+
+video{
+    width:100%;
+    max-width:700px;
+    border:2px solid #333;
+    border-radius:10px;
+}
+
+button{
+    padding:10px;
+    margin:5px;
+    cursor:pointer;
+}
+
+input{
+    width:100%;
+    padding:10px;
+    margin:10px 0;
+}
+
+#resultado{
+    margin-top:10px;
+    padding:10px;
+    background:white;
+    border-radius:5px;
+}
+
+#lista{
+    background:white;
+    padding:15px;
+    border-radius:5px;
+    min-height:100px;
+}
+
+.ok{
+    color:green;
+    font-weight:bold;
+}
+
+.duplicado{
+    color:red;
+    font-weight:bold;
+}
+
+.contador{
+    font-size:22px;
+    font-weight:bold;
+    margin-bottom:10px;
+}
+
+ul{
+    padding-left:20px;
+}
+</style>
+</head>
+<body>
+
+<h1>Inventario OCR</h1>
+
+<div class="contador">
+Total: <span id="total">0</span>
+</div>
+
+<video id="video" autoplay playsinline></video>
+
+<br>
+
+<button onclick="capturar()">Capturar una vez</button>
+<button onclick="iniciarAutoScan()">Iniciar automático</button>
+<button onclick="detenerAutoScan()">Detener automático</button>
+<button onclick="borrarUltimo()">Borrar último</button>
+<button onclick="limpiarTodo()">Limpiar todo</button>
+
+<input id="manual" type="text" placeholder="Añadir manualmente">
+
+<button onclick="agregarManual()">
+Añadir manualmente
+</button>
+
+<div id="resultado"></div>
+
+<h3>Registros</h3>
+
+<div id="lista">
+<ul id="registros"></ul>
+</div>
+
+<br>
+
+<button onclick="exportarTXT()">
+Exportar TXT
+</button>
+
+<button onclick="exportarCSV()">
+Exportar CSV
+</button>
+
+<canvas id="canvas" style="display:none;"></canvas>
+
+<script>
+
+const registros = new Set();
+
+let autoScan = false;
+let escaneando = false;
+
+let ultimaLectura = "";
+let instanteUltimaLectura = 0;
+
+const video = document.getElementById("video");
+
+navigator.mediaDevices.getUserMedia({
+    video:{
+        facingMode:"environment"
+    }
+})
+.then(stream=>{
+    video.srcObject = stream;
+})
+.catch(err=>{
+    alert("No se pudo acceder a la cámara");
+});
+
+function actualizarContador(){
+    document.getElementById("total").textContent =
+        registros.size;
+}
+
+function agregarRegistro(texto){
+
+    texto = texto.trim();
+
+    if(!texto) return;
+
+    const ahora = Date.now();
+
+    if(
+        texto === ultimaLectura &&
+        ahora - instanteUltimaLectura < 5000
+    ){
+        return;
+    }
+
+    ultimaLectura = texto;
+    instanteUltimaLectura = ahora;
+
+    if(registros.has(texto)){
+
+        document.getElementById("resultado").innerHTML =
+        '<span class="duplicado">Duplicado: '
+        + texto +
+        '</span>';
+
+        return;
+    }
+
+    registros.add(texto);
+
+    const li = document.createElement("li");
+    li.textContent = texto;
+
+    document
+    .getElementById("registros")
+    .appendChild(li);
+
+    document.getElementById("resultado").innerHTML =
+    '<span class="ok">Añadido: '
+    + texto +
+    '</span>';
+
+    actualizarContador();
+
+    beep();
+}
+
+async function capturar(){
+
+    const canvas =
+        document.getElementById("canvas");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const ctx = canvas.getContext("2d");
+
+    ctx.drawImage(
+        video,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+    document.getElementById("resultado").innerHTML =
+        "Procesando OCR...";
+
+    const resultado =
+    await Tesseract.recognize(
+        canvas,
+        'eng'
+    );
+
+    let texto =
+    resultado.data.text;
+
+    texto = texto
+        .replace(/\n/g," ")
+        .replace(/\s+/g," ")
+        .trim();
+
+    const encontrados =
+    texto.match(/[A-Z0-9\-]{6,40}/gi);
+
+    if(encontrados){
+
+        encontrados.forEach(valor=>{
+            agregarRegistro(valor);
+        });
+    }
+    else{
+
+        document.getElementById("resultado").innerHTML =
+            "No se detectó ningún número";
+    }
+}
+
+async function cicloAutoScan(){
+
+    while(autoScan){
+
+        if(!escaneando){
+
+            escaneando = true;
+
+            try{
+                await capturar();
+            }
+            catch(e){
+                console.error(e);
+            }
+
+            escaneando = false;
+        }
+
+        await new Promise(resolve =>
+            setTimeout(resolve,1500)
+        );
+    }
+}
+
+function iniciarAutoScan(){
+
+    if(autoScan) return;
+
+    autoScan = true;
+
+    document.getElementById("resultado").innerHTML =
+        "Escaneo automático iniciado";
+
+    cicloAutoScan();
+}
+
+function detenerAutoScan(){
+
+    autoScan = false;
+
+    document.getElementById("resultado").innerHTML =
+        "Escaneo automático detenido";
+}
+
+function agregarManual(){
+
+    const campo =
+    document.getElementById("manual");
+
+    agregarRegistro(campo.value);
+
+    campo.value = "";
+}
+
+function borrarUltimo(){
+
+    const lista =
+    document.getElementById("registros");
+
+    const ultimo =
+    lista.lastElementChild;
+
+    if(!ultimo) return;
+
+    registros.delete(
+        ultimo.textContent
+    );
+
+    ultimo.remove();
+
+    actualizarContador();
+}
+
+function limpiarTodo(){
+
+    registros.clear();
+
+    document
+    .getElementById("registros")
+    .innerHTML = "";
+
+    actualizarContador();
+
+    document.getElementById("resultado").innerHTML =
+        "";
+}
+
+function exportarTXT(){
+
+    const contenido =
+    [...registros].join("\n");
+
+    descargar(
+        contenido,
+        "inventario.txt",
+        "text/plain"
+    );
+}
+
+function exportarCSV(){
+
+    let csv = "NumeroSerie\n";
+
+    registros.forEach(valor=>{
+
+        csv += `"${valor}"\n`;
+
+    });
+
+    descargar(
+        csv,
+        "inventario.csv",
+        "text/csv"
+    );
+}
+
+function descargar(
+    contenido,
+    nombre,
+    tipo
+){
+
+    const blob =
+    new Blob(
+        [contenido],
+        {type:tipo}
+    );
+
+    const url =
+    URL.createObjectURL(blob);
+
+    const a =
+    document.createElement("a");
+
+    a.href = url;
+    a.download = nombre;
+
+    document.body.appendChild(a);
+
+    a.click();
+
+    document.body.removeChild(a);
+
+    URL.revokeObjectURL(url);
+}
+
+function beep(){
+
+    const audio =
+    new (window.AudioContext ||
+    window.webkitAudioContext)();
+
+    const osc =
+    audio.createOscillator();
+
+    osc.connect(audio.destination);
+
+    osc.frequency.value = 1000;
+
+    osc.start();
+
+    setTimeout(()=>{
+        osc.stop();
+    },100);
+}
+
+</script>
+
+</body>
+</html>
