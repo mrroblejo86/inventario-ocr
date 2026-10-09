@@ -85,6 +85,11 @@
 
     <div id="resultado"></div>
 
+    <details>
+        <summary>Texto leído por el OCR (depuración)</summary>
+        <pre id="crudo" style="white-space:pre-wrap;background:white;padding:10px;border-radius:5px;"></pre>
+    </details>
+
     <h2>Registros</h2>
 
     <div id="lista">
@@ -153,6 +158,34 @@
             mostrarMensaje("Añadido: " + valor, "ok");
         }
 
+        let worker = null;
+
+        async function obtenerWorker() {
+            if (!worker) {
+                worker = await Tesseract.createWorker("eng");
+                await worker.setParameters({
+                    // Solo letras mayúsculas, dígitos y guion; modo "texto disperso"
+                    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-",
+                    tessedit_pageseg_mode: "11"
+                });
+            }
+            return worker;
+        }
+
+        // Escala de grises + contraste para que el OCR lea mejor
+        function preprocesar(canvas) {
+            const ctx = canvas.getContext("2d");
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const d = img.data;
+            for (let i = 0; i < d.length; i += 4) {
+                let g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+                g = (g - 128) * 1.6 + 128;
+                g = Math.max(0, Math.min(255, g));
+                d[i] = d[i + 1] = d[i + 2] = g;
+            }
+            ctx.putImageData(img, 0, 0);
+        }
+
         async function capturar() {
             try {
                 if (!video.videoWidth) {
@@ -166,20 +199,32 @@
 
                 const ctx = canvas.getContext("2d");
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                preprocesar(canvas);
 
                 mostrarMensaje("Procesando OCR...");
 
-                const resultado = await Tesseract.recognize(canvas, "eng");
+                const w = await obtenerWorker();
+                const resultado = await w.recognize(canvas);
                 const texto = resultado.data.text;
 
-                // Solo cadenas de 6 a 40 caracteres que contengan al menos un dígito,
-                // para ignorar palabras como "SAMSUNG" o "MONITOR"
-                const coincidencias = texto.match(
-                    /\b(?=[A-Z0-9\-]*\d)[A-Z0-9\-]{6,40}\b/gi
-                );
+                // Texto bruto que ha leído el OCR (útil para ajustar el patrón)
+                document.getElementById("crudo").textContent =
+                    texto.trim() || "(vacío)";
 
-                if (coincidencias) {
-                    coincidencias.forEach(item => agregarRegistro(item));
+                // Une grupos separados por espacios dentro de una misma línea
+                // (el OCR suele partir las series), y busca cadenas con al menos un dígito
+                const candidatos = texto
+                    .split("\n")
+                    .flatMap(l => [l, l.replace(/\s+/g, "")]);
+
+                const encontrados = new Set();
+                candidatos.forEach(l => {
+                    const m = l.match(/(?=[A-Z0-9\-]*\d)[A-Z0-9\-]{5,40}/gi);
+                    if (m) m.forEach(x => encontrados.add(x));
+                });
+
+                if (encontrados.size) {
+                    encontrados.forEach(item => agregarRegistro(item));
                 } else {
                     mostrarMensaje("No se detectó ningún número");
                 }
